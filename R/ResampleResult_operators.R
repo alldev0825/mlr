@@ -29,25 +29,8 @@ getRRTaskDescription = function(res) {
   res$task.desc
 }
 
-#' @title Get list of predictions for train and test set of each single resample iteration.
-#'
-#' @description
-#' This function creates a list with two slots \code{train} and \code{test} where
-#' each slot is again a list of \code{\link{Prediction}} objects for each single
-#' resample iteration.
-#' In case that \code{predict = "train"} was used for the resample description
-#' (see \code{\link{makeResampleDesc}}), the slot \code{test} will be \code{NULL}
-#' and in case that \code{predict = "test"} was used, the slot \code{train} will be
-#' \code{NULL}.
-#'
-#' @param res [\code{ResampleResult}]\cr
-#'   The result of \code{\link{resample}} run with \code{keep.pred = TRUE}.
-#' @param ... [any]\cr
-#'   Further options passed to \code{\link{makePrediction}}.
-#' @return [list].
-#' @export
-#' @family resample
-getRRPredictionList = function(res, ...) {
+# This function creates Prediction objects for each resample iteration (separately, for train and test set)
+getPredictionList = function(res, ...) {
   assertClass(res, "ResampleResult")
   # We need to force keep.pred = TRUE (will be checked in getRRPredictions)
   pred = getRRPredictions(res)
@@ -61,29 +44,27 @@ getRRPredictionList = function(res, ...) {
   # get prediction objects for train and test set
   prediction = lapply(set, function(s) {
     # split by resample iterations
-    p.split = pred$data[pred$data$set == s,, drop = FALSE]
+    p.split = subset(pred$data, set == s)
     p.split = split(p.split, as.factor(p.split$iter))
     # create prediction object for each resample iteration
     p.split = lapply(p.split, function (p) {
       # get predictions based on predict.type
       if (predict.type == "prob") {
-        y = p[, stri_startswith_fixed(colnames(p), "prob."), drop = FALSE]
+        y = p[,grepl("^prob[.]", colnames(p))]
         # we need to remove the "prob." part in the colnames, otherwise
         # makePrediction thinks that the factor starts with "prob."
-        colnames(y) = stri_replace_first_fixed(colnames(y), "prob.", replacement =  "")
+        colnames(y) =  gsub("^prob[.]", "", colnames(y))
       } else {
         y = p$response
       }
       makePrediction(task.desc, id = p$id,
         truth = p$truth, y = y, row.names = p$id,
-        predict.type = predict.type, time = NA_real_, ...)
+        predict.type = predict.type, time = NA, ...)
     })
     # add time info afterwards
-    for(i in seq_along(p.split))
-      p.split[[i]]$time = time[i]
+    for(i in 1:length(p.split)) p.split[[i]]$time = time[i]
     return(p.split)
   })
-
   ret = setNames(prediction, set)
   if (is.null(ret$train)) ret = append(ret, list(train = NULL))
   if (is.null(ret$test)) ret = append(ret, list(test = NULL))
@@ -110,7 +91,7 @@ addRRMeasure = function(res, measures) {
   # if there are missing measures
   if (length(missing.measures) != 0) {
     # get list of prediction objects per iteration from resample result
-    pred = getRRPredictionList(res)
+    pred = getPredictionList(res)
 
     # recompute missing performance for train and/or test set
     set = names(pred)[!vlapply(pred, is.null)]
@@ -129,12 +110,7 @@ addRRMeasure = function(res, measures) {
       res$measures.test[, missing.measures] = NA else
         res$measures.test = cbind(res$measures.test, perf$test[, missing.measures, drop = FALSE])
     aggr = vnapply(measures[measures.id %in% missing.measures], function(m) {
-      m$aggr$fun(task = NULL,
-        perf.test = res$measures.test[, m$id],
-        perf.train = res$measures.train[, m$id],
-        measure = m,
-        pred = getRRPredictions(res),
-        group = res$pred$instance$group)
+      m$aggr$fun(task = NULL, perf.test = res$measures.test[, m$id], perf.train = res$measures.train[, m$id], measure = m)
     })
     names(aggr) = vcapply(measures[measures.id %in% missing.measures], measureAggrName)
     res$aggr = c(res$aggr, aggr)
